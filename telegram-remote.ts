@@ -35,6 +35,7 @@ export const TelegramRemotePlugin: Plugin = async ({
   const pendingPermissions = new Map<number, PendingPermission>()
   let isProcessing = false
   let openCodeCommands: OpenCodeCommand[] = []
+  let eventStreamAbort: AbortController | null = null
 
   // ---------- Helpers ----------
 
@@ -162,25 +163,49 @@ export const TelegramRemotePlugin: Plugin = async ({
     permissionId: string,
     approved: boolean,
   ) {
+    const response = approved ? "allow" : "deny"
     try {
-      const method =
-        (client.session as any).postSessionByIdPermissionsByPermissionId ||
-        (client as any).postSessionByIdPermissionsByPermissionId
-      if (method) {
-        await method({
+      // Try the SDK method first (top-level client method per SDK docs)
+      const sdkMethod = (client as any).postSessionByIdPermissionsByPermissionId
+      if (typeof sdkMethod === "function") {
+        await sdkMethod({
           path: { id: sessionId, permissionId },
-          body: { response: approved ? "allow" : "deny" },
+          body: { response },
         })
-      } else {
-        await fetch(
-          `http://127.0.0.1:4096/session/${sessionId}/permissions/${permissionId}`,
-          {
+        return
+      }
+
+      // Try alternate SDK paths
+      const sessionMethod = (client.session as any)
+        .postSessionByIdPermissionsByPermissionId
+      if (typeof sessionMethod === "function") {
+        await sessionMethod({
+          path: { id: sessionId, permissionId },
+          body: { response },
+        })
+        return
+      }
+
+      // Fallback to direct HTTP - try both URL patterns
+      const urls = [
+        `http://127.0.0.1:4096/session/${sessionId}/permissions/${permissionId}`,
+        `http://127.0.0.1:4096/session/${sessionId}/permission/${permissionId}`,
+      ]
+      let lastErr: any
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ response: approved ? "allow" : "deny" }),
-          },
-        )
+            body: JSON.stringify({ response }),
+          })
+          if (res.ok) return
+          lastErr = `HTTP ${res.status}: ${await res.text()}`
+        } catch (e) {
+          lastErr = e
+        }
       }
+      throw lastErr
     } catch (err) {
       console.error("[telegram-remote] Error responding to permission:", err)
       await send(`Failed to send permission response: ${err}`)
@@ -190,6 +215,111 @@ export const TelegramRemotePlugin: Plugin = async ({
   // ================================================================
   // Deferred initialization - start bot AFTER plugin returns hooks
   // ================================================================
+
+  // ---------- Handle permission event from any source ----------
+
+  async function handlePermissionAsked(props: any) {
+    const sessionId =
+      props.sessionID || props.session_id || props.sessionId
+    if (!sessionId || sessionId !== currentSessionId) return
+
+    const tool = props.tool || "unknown"
+    const permissionId =
+      props.permissionID || props.permission_id || props.permissionId || props.id
+    if (!permissionId) {
+      console.error("[telegram-remote] Permission event missing permissionId:", props)
+      return
+    }
+
+    const args = props.args
+      ? JSON.stringify(props.args, null, 2).slice(0, 400)
+      : props.input
+        ? JSON.stringify(props.input, null, 2).slice(0, 400)
+        : ""
+
+    // Telegram callback_data has a 64 byte limit, so truncate the
+    // permissionId if needed (we look up by it in pendingPermissions)
+    const shortId = permissionId.slice(0, 48)
+    const sentMsg = await send(
+      `*Permission Request*\n\nTool: \`${escMd(tool)}\`\n` +
+        (args ? `\`\`\`\n${args}\n\`\`\`\n\n` : "\n") +
+        `Approve or Deny?`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "Approve", callback_data: `pa_${shortId}` },
+              { text: "Deny", callback_data: `pd_${shortId}` },
+            ],
+          ],
+        },
+      },
+    )
+
+    if (sentMsg && permissionId) {
+      pendingPermissions.set(sentMsg.message_id, {
+        permissionId,
+        sessionId,
+        description: `${tool}: ${args}`,
+      })
+
+      // Auto-deny after 5 minutes
+      setTimeout(async () => {
+        if (pendingPermissions.has(sentMsg.message_id)) {
+          pendingPermissions.delete(sentMsg.message_id)
+          await respondToPermission(sessionId, permissionId, false)
+          await send("Permission timed out (5 min). Auto-denied.")
+        }
+      }, 5 * 60 * 1000)
+    }
+  }
+
+  // ---------- SSE event stream for real-time events ----------
+
+  async function startEventStream() {
+    try {
+      eventStreamAbort = new AbortController()
+      const events = await client.event.subscribe()
+      if (!events.stream) {
+        console.error("[telegram-remote] No event stream available")
+        return
+      }
+
+      ;(async () => {
+        try {
+          for await (const event of events.stream as any) {
+            try {
+              if (event.type === "permission.asked") {
+                await handlePermissionAsked(event.properties || event)
+              }
+              if (event.type === "session.error") {
+                const props = event.properties || event
+                const sessionId =
+                  props.sessionID || props.session_id || props.sessionId
+                if (sessionId === currentSessionId) {
+                  await send(
+                    `*Session Error:*\n${truncate(String(props.error || "Unknown error"), 1000)}`,
+                  )
+                }
+              }
+            } catch (err) {
+              console.error("[telegram-remote] Error processing event:", err)
+            }
+          }
+        } catch (err: any) {
+          if (err?.name !== "AbortError") {
+            console.error("[telegram-remote] Event stream ended:", err)
+            // Reconnect after a delay
+            setTimeout(() => startEventStream(), 3000)
+          }
+        }
+      })()
+    } catch (err) {
+      console.error("[telegram-remote] Failed to start event stream:", err)
+      // Retry after delay
+      setTimeout(() => startEventStream(), 5000)
+    }
+  }
 
   async function initBot() {
     try {
@@ -222,6 +352,12 @@ export const TelegramRemotePlugin: Plugin = async ({
 
       registerCommands()
       registerMessageHandler()
+      registerCallbackHandler()
+
+      // Start SSE event stream for real-time permission events
+      startEventStream().catch((err) => {
+        console.error("[telegram-remote] Event stream startup failed:", err)
+      })
 
       // Async startup tasks (don't block)
       setupMenuAndNotify().catch((err) => {
@@ -626,6 +762,74 @@ export const TelegramRemotePlugin: Plugin = async ({
   }
 
   // ================================================================
+  // Register callback query handler (inline keyboard buttons)
+  // ================================================================
+
+  function registerCallbackHandler() {
+    if (!bot) return
+
+    bot.on("callback_query", async (query) => {
+      if (!query.data || !query.message) return
+      if (query.message.chat.id.toString() !== chatId) return
+
+      const data = query.data
+
+      // Handle permission approve/deny buttons (pa_ = approve, pd_ = deny)
+      if (data.startsWith("pa_") || data.startsWith("pd_")) {
+        const approved = data.startsWith("pa_")
+        const permissionId = data.slice(3) // Remove "pa_" or "pd_" prefix
+
+        // Find the pending permission by permissionId (match by prefix
+        // since callback_data may have been truncated)
+        let foundMsgId: number | undefined
+        let foundPending: PendingPermission | undefined
+        for (const [msgId, pending] of pendingPermissions.entries()) {
+          if (pending.permissionId.startsWith(permissionId)) {
+            foundMsgId = msgId
+            foundPending = pending
+            break
+          }
+        }
+
+        if (foundPending && foundMsgId !== undefined) {
+          pendingPermissions.delete(foundMsgId)
+          await respondToPermission(
+            foundPending.sessionId,
+            foundPending.permissionId,
+            approved,
+          )
+
+          // Update the message to show the decision
+          try {
+            await bot!.editMessageText(
+              `${query.message.text}\n\n${approved ? "Approved" : "Denied"}`,
+              {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+              },
+            )
+          } catch {
+            // Message may have been deleted or already edited
+          }
+
+          // Acknowledge the callback
+          await bot!.answerCallbackQuery(query.id, {
+            text: approved ? "Approved" : "Denied",
+          })
+        } else {
+          await bot!.answerCallbackQuery(query.id, {
+            text: "Permission already handled or expired.",
+          })
+        }
+        return
+      }
+
+      // Acknowledge unknown callbacks
+      await bot!.answerCallbackQuery(query.id)
+    })
+  }
+
+  // ================================================================
   // Async startup (register menu + send notification)
   // ================================================================
 
@@ -695,43 +899,24 @@ export const TelegramRemotePlugin: Plugin = async ({
       const props = event.properties || {}
 
       if (event.type === "permission.asked") {
-        const sessionId = props.sessionID || props.session_id
-        if (sessionId && sessionId === currentSessionId) {
-          const tool = props.tool || "unknown"
-          const permissionId = props.permissionID || props.permission_id || props.id
-          const args = props.args
-            ? JSON.stringify(props.args, null, 2).slice(0, 400)
-            : ""
-
-          const sentMsg = await send(
-            `*Permission Request*\n\nTool: \`${escMd(tool)}\`\n` +
-              (args ? `\`\`\`\n${args}\n\`\`\`\n\n` : "\n") +
-              `Reply *yes* or *no*`,
-            { reply_markup: { force_reply: true, selective: true } },
-          )
-
-          if (sentMsg && permissionId) {
-            pendingPermissions.set(sentMsg.message_id, {
-              permissionId,
-              sessionId,
-              description: `${tool}: ${args}`,
-            })
-
-            setTimeout(async () => {
-              if (pendingPermissions.has(sentMsg.message_id)) {
-                pendingPermissions.delete(sentMsg.message_id)
-                await respondToPermission(sessionId, permissionId, false)
-                await send("Permission timed out (5 min). Auto-denied.")
-              }
-            }, 5 * 60 * 1000)
-          }
+        // Use the centralized handler (dedup: skip if already handled via SSE)
+        const permissionId =
+          props.permissionID || props.permission_id || props.permissionId || props.id
+        const alreadyHandled = Array.from(pendingPermissions.values()).some(
+          (p) => p.permissionId === permissionId,
+        )
+        if (!alreadyHandled) {
+          await handlePermissionAsked(props)
         }
       }
 
       if (event.type === "session.error") {
-        const sessionId = props.sessionID || props.session_id
+        const sessionId =
+          props.sessionID || props.session_id || props.sessionId
         if (sessionId === currentSessionId) {
-          await send(`*Session Error:*\n${truncate(String(props.error || "Unknown error"), 1000)}`)
+          await send(
+            `*Session Error:*\n${truncate(String(props.error || "Unknown error"), 1000)}`,
+          )
         }
       }
     },
