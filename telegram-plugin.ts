@@ -7,11 +7,11 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID
 
 // Setup logging to file
-const LOG_FILE = path.join(process.env.HOME || "/tmp", ".opencode-telegram-remote.log")
+const LOG_FILE = path.join(process.env.HOME || "/tmp", ".opencode-telegram-plugin.log")
 function log(...args: any[]) {
   const timestamp = new Date().toISOString()
   const message = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ")
-  const line = `[${timestamp}] [telegram-remote] ${message}\n`
+  const line = `[${timestamp}] [telegram-plugin] ${message}\n`
   fs.appendFileSync(LOG_FILE, line)
 }
 
@@ -32,15 +32,15 @@ export const TelegramRemotePlugin: Plugin = async ({
   directory,
 }) => {
   log("=".repeat(80))
-  log(`[telegram-remote] Plugin loading... Log file: ${LOG_FILE}`)
-  log(`[telegram-remote] Directory: ${directory}`)
+  log(`[telegram-plugin] Plugin loading... Log file: ${LOG_FILE}`)
+  log(`[telegram-plugin] Directory: ${directory}`)
   
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    log("[telegram-remote] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID. Plugin disabled.")
+    log("[telegram-plugin] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID. Plugin disabled.")
     return {}
   }
   
-  log("[telegram-remote] Plugin enabled with valid config")
+  log("[telegram-plugin] Plugin enabled with valid config")
 
   const chatId = TELEGRAM_CHAT_ID
 
@@ -73,7 +73,7 @@ export const TelegramRemotePlugin: Plugin = async ({
           options,
         )
       } catch (err) {
-        log("ERROR:", "[telegram-remote] Failed to send message:", err)
+        log("ERROR:", "[telegram-plugin] Failed to send message:", err)
       }
     }
   }
@@ -122,19 +122,19 @@ export const TelegramRemotePlugin: Plugin = async ({
           path: { id: currentSessionId },
         })
         if (session.data) {
-          log(`[telegram-remote] Using existing session: ${currentSessionId}`)
+          log(`[telegram-plugin] Using existing session: ${currentSessionId}`)
           return currentSessionId
         }
       } catch {
         // Session gone, create new one
-        log(`[telegram-remote] Session ${currentSessionId} not found, creating new one`)
+        log(`[telegram-plugin] Session ${currentSessionId} not found, creating new one`)
       }
     }
     const session = await client.session.create({
       body: { title: "Telegram Remote" },
     })
     currentSessionId = session.data!.id
-    log(`[telegram-remote] Created new session: ${currentSessionId}`)
+    log(`[telegram-plugin] Created new session: ${currentSessionId}`)
     return currentSessionId
   }
 
@@ -153,7 +153,7 @@ export const TelegramRemotePlugin: Plugin = async ({
         }))
       }
     } catch (err) {
-      log("ERROR:", "[telegram-remote] Failed to fetch commands:", err)
+      log("ERROR:", "[telegram-plugin] Failed to fetch commands:", err)
     }
     return []
   }
@@ -185,7 +185,7 @@ export const TelegramRemotePlugin: Plugin = async ({
 
     awaitingPromptResult = false
     isProcessing = false
-    log(`[telegram-remote] Session idle, fetching last assistant message`)
+    log(`[telegram-plugin] Session idle, fetching last assistant message`)
 
     try {
       const result = await client.session.messages({ path: { id: sessionId } })
@@ -203,7 +203,7 @@ export const TelegramRemotePlugin: Plugin = async ({
       }
       await send("Task completed.")
     } catch (err: any) {
-      log(`[telegram-remote] Error fetching messages after idle: ${err?.message || err}`)
+      log(`[telegram-plugin] Error fetching messages after idle: ${err?.message || err}`)
       await send("Task completed (could not fetch response).")
     }
   }
@@ -228,11 +228,11 @@ export const TelegramRemotePlugin: Plugin = async ({
         path: { id: sessionId, permissionID: permissionId },
         body: { response: reply },
       })
-      log(`[telegram-remote] Permission responded via SDK: ${reply}`)
+      log(`[telegram-plugin] Permission responded via SDK: ${reply}`)
       await send(`✅ ${label}`)
       return
     } catch (e: any) {
-      log(`[telegram-remote] SDK permission response failed: ${e?.message || e}`)
+      log(`[telegram-plugin] SDK permission response failed: ${e?.message || e}`)
     }
 
     // Fallback: try v2 permission.reply() if SDK is upgraded in the future
@@ -240,16 +240,16 @@ export const TelegramRemotePlugin: Plugin = async ({
       const permClient = (client as any).permission
       if (permClient?.reply && typeof permClient.reply === "function") {
         await permClient.reply({ requestID: permissionId, reply })
-        log(`[telegram-remote] Permission responded via permission.reply(): ${reply}`)
+        log(`[telegram-plugin] Permission responded via permission.reply(): ${reply}`)
         await send(`✅ ${label}`)
         return
       }
     } catch (e: any) {
-      log(`[telegram-remote] permission.reply() failed: ${e?.message || e}`)
+      log(`[telegram-plugin] permission.reply() failed: ${e?.message || e}`)
     }
 
     // All methods failed
-    log("[telegram-remote] All permission response methods failed")
+    log("[telegram-plugin] All permission response methods failed")
     await send(
       `⚠️ Could not respond to permission automatically.\n` +
       `Please respond in the OpenCode TUI directly.`
@@ -306,25 +306,25 @@ export const TelegramRemotePlugin: Plugin = async ({
   // ---------- SSE event stream for real-time events ----------
 
   async function startEventStream() {
-    log("[telegram-remote] Starting SSE event stream...")
+    log("[telegram-plugin] Starting SSE event stream...")
     try {
       eventStreamAbort = new AbortController()
-      log("[telegram-remote] Subscribing to events...")
+      log("[telegram-plugin] Subscribing to events...")
       const events = await client.event.subscribe()
-      log("[telegram-remote] Event subscription result:", events)
+      log("[telegram-plugin] Event subscription result:", events)
       if (!events.stream) {
-        log("ERROR:", "[telegram-remote] No event stream available")
+        log("ERROR:", "[telegram-plugin] No event stream available")
         return
       }
 
-      log("[telegram-remote] Event stream connected, waiting for events...")
+      log("[telegram-plugin] Event stream connected, waiting for events...")
       ;(async () => {
         try {
           for await (const event of events.stream as any) {
-            log(`[telegram-remote] SSE EVENT RECEIVED: type=${event.type}`, JSON.stringify(event, null, 2))
+            log(`[telegram-plugin] SSE EVENT RECEIVED: type=${event.type}`, JSON.stringify(event, null, 2))
             try {
               if (event.type === "permission.asked") {
-                log("[telegram-remote] Permission event detected, calling handler...")
+                log("[telegram-plugin] Permission event detected, calling handler...")
                 await handlePermissionAsked(event.properties || event)
               }
               if (event.type === "session.idle") {
@@ -332,7 +332,7 @@ export const TelegramRemotePlugin: Plugin = async ({
                 const sessionId =
                   props.sessionID || props.session_id || props.sessionId
                 if (sessionId) {
-                  log(`[telegram-remote] SSE session.idle for ${sessionId}`)
+                  log(`[telegram-plugin] SSE session.idle for ${sessionId}`)
                   await handleSessionIdle(sessionId)
                 }
               }
@@ -351,26 +351,26 @@ export const TelegramRemotePlugin: Plugin = async ({
                 }
               }
             } catch (err) {
-              log("ERROR:", "[telegram-remote] Error processing event:", err)
+              log("ERROR:", "[telegram-plugin] Error processing event:", err)
             }
           }
         } catch (err: any) {
           if (err?.name !== "AbortError") {
-            log("ERROR:", "[telegram-remote] Event stream ended:", err)
+            log("ERROR:", "[telegram-plugin] Event stream ended:", err)
             // Reconnect after a delay
             setTimeout(() => startEventStream(), 3000)
           }
         }
       })()
     } catch (err) {
-      log("ERROR:", "[telegram-remote] Failed to start event stream:", err)
+      log("ERROR:", "[telegram-plugin] Failed to start event stream:", err)
       // Retry after delay
       setTimeout(() => startEventStream(), 5000)
     }
   }
 
   async function initBot() {
-    log("[telegram-remote] Initializing bot...")
+    log("[telegram-plugin] Initializing bot...")
     try {
       // First, kill any stale polling sessions by calling deleteWebhook
       // and consuming pending updates. This prevents the 409 Conflict error.
@@ -386,18 +386,18 @@ export const TelegramRemotePlugin: Plugin = async ({
           params: { timeout: 30 },
         },
       })
-      log("[telegram-remote] Bot created successfully")
+      log("[telegram-plugin] Bot created successfully")
 
       // Catch polling errors so they don't crash the process
       bot.on("polling_error", (err) => {
         // 409 = another instance was running, we already handled it above
         // but log others
         if (!err.message?.includes("409")) {
-          log("ERROR:", "[telegram-remote] Polling error:", err.message)
+          log("ERROR:", "[telegram-plugin] Polling error:", err.message)
         }
       })
       bot.on("error", (err) => {
-        log("ERROR:", "[telegram-remote] Bot error:", err.message)
+        log("ERROR:", "[telegram-plugin] Bot error:", err.message)
       })
 
       registerCommands()
@@ -405,17 +405,17 @@ export const TelegramRemotePlugin: Plugin = async ({
       registerCallbackHandler()
 
       // Start SSE event stream for real-time permission events
-      log("[telegram-remote] Starting event stream...")
+      log("[telegram-plugin] Starting event stream...")
       startEventStream().catch((err) => {
-        log("ERROR:", "[telegram-remote] Event stream startup failed:", err)
+        log("ERROR:", "[telegram-plugin] Event stream startup failed:", err)
       })
 
       // Async startup tasks (don't block)
       setupMenuAndNotify().catch((err) => {
-        log("ERROR:", "[telegram-remote] Startup notification failed:", err)
+        log("ERROR:", "[telegram-plugin] Startup notification failed:", err)
       })
     } catch (err) {
-      log("ERROR:", "[telegram-remote] Failed to start bot:", err)
+      log("ERROR:", "[telegram-plugin] Failed to start bot:", err)
     }
   }
 
@@ -817,7 +817,7 @@ export const TelegramRemotePlugin: Plugin = async ({
         isProcessing = true
         awaitingPromptResult = true
         const sessionId = await ensureSession()
-        log(`[telegram-remote] Sending async prompt to session: ${sessionId}`)
+        log(`[telegram-plugin] Sending async prompt to session: ${sessionId}`)
         await send("Working on it...")
 
         // Use promptAsync (fire-and-forget) so the connection is free for
@@ -827,7 +827,7 @@ export const TelegramRemotePlugin: Plugin = async ({
           path: { id: sessionId },
           body: { parts: [{ type: "text", text }] },
         })
-        log(`[telegram-remote] Async prompt dispatched, waiting for session.idle`)
+        log(`[telegram-plugin] Async prompt dispatched, waiting for session.idle`)
       } catch (err: any) {
         isProcessing = false
         awaitingPromptResult = false
@@ -956,7 +956,7 @@ export const TelegramRemotePlugin: Plugin = async ({
     try {
       await bot.setMyCommands(telegramCommands.slice(0, 100))
     } catch (err) {
-      log("ERROR:", "[telegram-remote] Failed to set bot commands:", err)
+      log("ERROR:", "[telegram-plugin] Failed to set bot commands:", err)
     }
 
     await send(
@@ -976,21 +976,21 @@ export const TelegramRemotePlugin: Plugin = async ({
 
   return {
     event: async ({ event }: { event: any }) => {
-      log(`[telegram-remote] Event: ${event.type}`)
+      log(`[telegram-plugin] Event: ${event.type}`)
       const props = event.properties || {}
 
       if (event.type === "permission.asked") {
-        log("[telegram-remote] Event hook detected permission.asked event")
+        log("[telegram-plugin] Event hook detected permission.asked event")
         // Use the centralized handler (dedup: skip if already handled via SSE)
         const permissionId =
           props.permissionID || props.permission_id || props.permissionId || props.id
-        log(`[telegram-remote] Extracted permissionId: ${permissionId}`)
+        log(`[telegram-plugin] Extracted permissionId: ${permissionId}`)
         const alreadyHandled = Array.from(pendingPermissions.values()).some(
           (p) => p.permissionId === permissionId,
         )
-        log(`[telegram-remote] Already handled via SSE: ${alreadyHandled}`)
+        log(`[telegram-plugin] Already handled via SSE: ${alreadyHandled}`)
         if (!alreadyHandled) {
-          log("[telegram-remote] Calling handlePermissionAsked from event hook...")
+          log("[telegram-plugin] Calling handlePermissionAsked from event hook...")
           await handlePermissionAsked(props)
         }
       }
@@ -999,7 +999,7 @@ export const TelegramRemotePlugin: Plugin = async ({
         const sessionId =
           props.sessionID || props.session_id || props.sessionId
         if (sessionId) {
-          log(`[telegram-remote] Event hook session.idle for ${sessionId}`)
+          log(`[telegram-plugin] Event hook session.idle for ${sessionId}`)
           // Dedup: only handle if SSE hasn't already handled it
           if (awaitingPromptResult && sessionId === currentSessionId) {
             await handleSessionIdle(sessionId)

@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "description": "Control OpenCode from your phone via Telegram. Send prompts, manage sessions, run shell commands, approve permissions, and execute any OpenCode slash command.",
   "type": "module",
-  "main": "./dist/telegram-remote.js",
-  "types": "./dist/telegram-remote.d.ts",
+  "main": "./dist/telegram-plugin.js",
+  "types": "./dist/telegram-plugin.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/telegram-remote.js",
-      "types": "./dist/telegram-remote.d.ts"
+      "import": "./dist/telegram-plugin.js",
+      "types": "./dist/telegram-plugin.d.ts"
     }
   },
   "files": [
@@ -17,11 +17,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun build ./telegram-remote.ts --outdir ./dist --target node",
+    "build": "bun build ./telegram-plugin.ts --outdir ./dist --target node",
     "build:types": "tsc --emitDeclarationOnly --outDir ./dist",
     "build:all": "bun run build && bun run build:types",
     "prepublishOnly": "bun run build:all",
-    "dev": "bun build ./telegram-remote.ts --outdir ./dist --target node --watch",
+    "dev": "bun build ./telegram-plugin.ts --outdir ./dist --target node --watch",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -50,10 +50,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/timjonez/opencode_telegram_bot.git"
+    "url": "git+https://github.com/timjonez/opencode_telegram_plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/timjonez/opencode_telegram_bot/issues"
+    "url": "https://github.com/timjonez/opencode_telegram_plugin/issues"
   },
-  "homepage": "https://github.com/timjonez/opencode_telegram_bot#readme"
+  "homepage": "https://github.com/timjonez/opencode_telegram_plugin#readme"
 }

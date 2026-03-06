@@ -1,4 +1,4 @@
-# opencode-telegram-remote
+# opencode-telegram-plugin
 
 Control [OpenCode](https://opencode.ai) from your phone via Telegram. Send prompts, manage sessions, run shell commands, approve permissions, and execute any OpenCode slash command -- all from a Telegram chat.
 
@@ -11,7 +11,7 @@ Add to your `opencode.json`:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["opencode-telegram-remote"]
+  "plugins": ["opencode-telegram-plugin"]
 }
 ```
 
@@ -21,14 +21,14 @@ OpenCode will automatically install the plugin using Bun.
 
 ### Manual install
 
-Copy `telegram-remote.ts` to your plugins directory:
+Copy `telegram-plugin.ts` to your plugins directory:
 
 ```bash
 # Global
-cp telegram-remote.ts ~/.config/opencode/plugins/
+cp telegram-plugin.ts ~/.config/opencode/plugins/
 
 # Project-specific
-cp telegram-remote.ts .opencode/plugins/
+cp telegram-plugin.ts .opencode/plugins/
 ```
 
 Then add the dependency to your `package.json`:

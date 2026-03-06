@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "opencode-telegram-remote",
+      "name": "opencode-telegram-plugin",
       "dependencies": {
         "node-telegram-bot-api": "^0.66.0",
       },
